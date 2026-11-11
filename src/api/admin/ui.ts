@@ -829,6 +829,7 @@ tailwind.config = { corePlugins: { preflight: false } };
             <div class="seg" role="group" :aria-label="L('日记类型', 'Entry type')">
               <button type="button" @click="diaryMode = 'daily'; diaryPick = ''; diaryReading = false" :class="diaryMode === 'daily' ? 'is-active' : ''" :aria-pressed="diaryMode === 'daily' ? 'true' : 'false'" x-text="L('每天', 'Daily')"></button>
               <button type="button" @click="diaryMode = 'weekly'; diaryPick = ''; diaryReading = false" :class="diaryMode === 'weekly' ? 'is-active' : ''" :aria-pressed="diaryMode === 'weekly' ? 'true' : 'false'" x-text="L('每周', 'Weekly')"></button>
+              <button type="button" @click="diaryMode = 'monthly'; diaryPick = ''; diaryReading = false" :class="diaryMode === 'monthly' ? 'is-active' : ''" :aria-pressed="diaryMode === 'monthly' ? 'true' : 'false'" x-text="L('每月', 'Monthly')"></button>
             </div>
             <button type="button" @click="loadDiary()" class="btn btn-icon hidden md:inline-flex" :aria-label="L('刷新', 'Refresh')">${I.refresh}</button>
           </div>
@@ -843,7 +844,7 @@ tailwind.config = { corePlugins: { preflight: false } };
             </button>
             <nav class="panel divide overflow-hidden" :aria-label="L('日记列表', 'Entries')">
               <template x-if="diaryListItems().length === 0">
-                <div class="empty" x-text="diaryMode === 'daily' ? L('还没有日记。', 'No journal entries yet.') : L('还没有周记。', 'No weekly summaries yet.')"></div>
+                <div class="empty" x-text="diaryMode === 'daily' ? L('还没有日记。', 'No journal entries yet.') : diaryMode === 'monthly' ? L('还没有月记。', 'No monthly summaries yet.') : L('还没有周记。', 'No weekly summaries yet.')"></div>
               </template>
               <template x-for="item in diaryListItems()" :key="item.key">
                 <button type="button" @click="openDiary(item.key)" class="entry-btn" :class="diaryCurrentKey() === item.key ? 'is-active' : ''" :aria-current="diaryCurrentKey() === item.key ? 'true' : null">
@@ -863,16 +864,16 @@ tailwind.config = { corePlugins: { preflight: false } };
             <template x-for="entry in (diaryCurrent() ? [diaryCurrent()] : [])" :key="diaryCurrentKey()">
               <div>
                 <div class="mb-5" style="border-bottom: 1px solid var(--div); padding-bottom: 16px">
-                  <div class="text-[13px] muted" x-text="entry.week ? entry.week + ' · ' + entry.start_date + ' – ' + entry.end_date : longDayLabel(entry.date)"></div>
+                  <div class="text-[13px] muted" x-text="entry.month ? monthLabel(entry.month) : entry.week ? entry.week + ' · ' + entry.start_date + ' – ' + entry.end_date : longDayLabel(entry.date)"></div>
                   <h2 class="mt-1 text-[22px] font-semibold leading-snug" x-text="entry.title"></h2>
                   <div class="mt-2 flex flex-wrap gap-2">
                     <span x-show="entry.week" class="chip chip-violet" x-text="L(entry.source_days + ' 天汇入', 'From ' + entry.source_days + ' days')"></span>
-                    <span x-show="!entry.week && entry.source_message_ids && entry.source_message_ids.length" class="chip" x-text="L('基于 ' + (entry.source_message_ids || []).length + ' 条原文', 'From ' + (entry.source_message_ids || []).length + ' messages')"></span>
-                    <span x-show="!entry.week && entry.sources_kept != null" class="chip" :class="entry.sources_kept ? 'chip-ok' : 'chip-dim'" x-text="entry.sources_kept ? L('原文还在，可以回看', 'Originals still kept') : L('原文已过保留期，只剩这篇', 'Originals expired; only this entry remains')"></span>
+                    <span x-show="entry.date && entry.source_message_ids && entry.source_message_ids.length" class="chip" x-text="L('基于 ' + (entry.source_message_ids || []).length + ' 条原文', 'From ' + (entry.source_message_ids || []).length + ' messages')"></span>
+                    <span x-show="entry.date && entry.sources_kept != null" class="chip" :class="entry.sources_kept ? 'chip-ok' : 'chip-dim'" x-text="entry.sources_kept ? L('原文还在，可以回看', 'Originals still kept') : L('原文已过保留期，只剩这篇', 'Originals expired; only this entry remains')"></span>
                   </div>
                 </div>
                 <template x-for="(para, index) in paragraphs(entry.summary)" :key="index"><p x-text="para"></p></template>
-                <div x-show="!entry.week && entry.sources_kept !== 0" class="mt-6 flex flex-wrap items-center gap-3" style="border-top: 1px solid var(--div); padding-top: 16px">
+                <div x-show="entry.date && entry.sources_kept !== 0" class="mt-6 flex flex-wrap items-center gap-3" style="border-top: 1px solid var(--div); padding-top: 16px">
                   <button type="button" x-show="entry.sources_kept !== 0" @click="rewriteDiary(entry)" :disabled="diaryRewriting !== ''" class="btn btn-sm" x-text="diaryRewriting === entry.date ? L('重写中，请保持页面打开…', 'Rewriting — keep this page open…') : L('用原文重写这篇', 'Rewrite from the originals')"></button>
                   <span x-show="entry.sources_kept !== 0" class="text-xs muted">${t("会覆盖现在的内容。", "Replaces the current text.")}</span>
                 </div>
@@ -1643,8 +1644,12 @@ tailwind.config = { corePlugins: { preflight: false } };
                   </div>
                   <div x-show="gwIsOpen('上游')" class="grid gap-2 px-[18px] pb-[18px]">
                     <input x-model="gwAddress" :aria-label="L('上游地址', 'Upstream')" class="field" :placeholder="L('CF 账号 ID（32 位），或完整地址，如 new-api 的 https://…/v1', 'Cloudflare account ID (32 chars), or a full address such as https://…/v1')">
-                    <p class="text-xs leading-5 muted">${t("chat 走 compat，全 provider；messages / responses 走各 provider 原生端点，模型名带 provider/ 前缀。BYOK 钥匙在 AI Gateway 仪表盘；CF 令牌去 Worker Secrets 加 CLOUDFLARE_API_TOKEN。Gateway ID 在「全部设置 → 模型与线路」里，默认 default。", "Chat uses the compat endpoint for every provider; messages / responses use each provider’s native endpoint, with a provider/ prefix on the model name. BYOK keys live in the AI Gateway dashboard; add CLOUDFLARE_API_TOKEN under Worker secrets. The gateway ID is under All settings → Models &amp; routing (default: default).")} <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">${t("打开 Cloudflare ↗", "Open Cloudflare ↗")}</a></p>
+                    <p class="text-xs leading-5 muted">${t("Claude（anthropic/…）的 messages 走 Cloudflare 的 AI REST API；chat 走 compat，全 provider；其余 messages / responses 走各 provider 原生端点。模型名带 provider/ 前缀。BYOK 钥匙在 AI Gateway 仪表盘；CF 令牌去 Worker Secrets 加 CLOUDFLARE_API_TOKEN，要有 AI Gateway Run 和 Workers AI Read。网关和运行地区在下面。", "Claude (anthropic/…) on messages goes to Cloudflare’s AI REST API; chat uses the compat endpoint for every provider; other messages / responses use each provider’s native endpoint. Model names carry a provider/ prefix. BYOK keys live in the AI Gateway dashboard; add CLOUDFLARE_API_TOKEN under Worker secrets, with AI Gateway Run and Workers AI Read. The gateway and where the Worker runs are set below.")} <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">${t("打开 Cloudflare ↗", "Open Cloudflare ↗")}</a></p>
                   </div>
+                </div>
+
+                <div class="px-[18px] py-1">
+                  <template x-for="item in gwUpstreamSettings()" :key="item.name">${SETTING_ROW}</template>
                 </div>
 
                 <div>
@@ -2043,6 +2048,7 @@ function memoryAdmin() {
     diaryDailies: [],
     diaryRewriting: '',
     diaryWeeklies: [],
+    diaryMonthlies: [],
     diaryExpanded: {},
     diaryMode: 'daily',
     diaryPick: '',
@@ -2144,6 +2150,13 @@ function memoryAdmin() {
       if (this.lang === 'en') return date.toLocaleDateString('en-US', short ? { month: 'short', day: 'numeric' } : { weekday: 'short', month: 'short', day: 'numeric' });
       const head = (date.getMonth() + 1) + '月' + date.getDate() + '日';
       return short ? head : head + ' ' + ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
+    },
+    // 2026-08 → 2026年8月 / August 2026
+    monthLabel(label) {
+      const match = /^(\d{4})-(\d{2})$/.exec(label || '');
+      if (!match) return label || '';
+      if (this.lang === 'en') return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+      return match[1] + '年' + Number(match[2]) + '月';
     },
     longDayLabel(label) {
       const date = this.parseDay(label);
@@ -2431,12 +2444,16 @@ function memoryAdmin() {
       return items.filter(function(item) { return item.kind === 'switch'; })
         .concat(items.filter(function(item) { return item.kind !== 'switch'; }));
     },
-    // 没在搜时「常用」那几项不在分组里重复；搜的时候所有项都参与（中英文名、说明、变量名都能搜），命中的组自动展开。
+    // 网关和运行地区画在「模型与上游」里上游地址下面。
+    gwUpstreamSettings() {
+      return this.gwItems().filter(function(item) { return item.upstream; });
+    },
+    // 没在搜时「常用」和上游那几项不在分组里重复；搜的时候所有项都参与（中英文名、说明、变量名都能搜），命中的组自动展开。
     gwSections() {
       const q = this.gwQuery.trim().toLowerCase();
       return this.gwGroups.map(function(g) {
         const items = g.items.filter(function(item) {
-          if (!q) return !item.common;
+          if (!q) return !item.common && !item.upstream;
           return [item.label, item.hint, item.labelEn, item.hintEn, item.name, g.group, g.groupEn].some(function(text) { return String(text || '').toLowerCase().includes(q); });
         });
         return { group: g.group, groupEn: g.groupEn || '', items: items, changed: items.filter(function(item) { return item.saved; }).length };
@@ -2618,7 +2635,7 @@ function memoryAdmin() {
       this.reviewSelected = {};
       this.precious = []; this.glossary = [];
       this.notebookPages = []; this.notebookDraft = null; this.notebookLoaded = false;
-      this.diaryDailies = []; this.diaryWeeklies = []; this.diaryExpanded = {}; this.diaryRewriting = ''; this.diaryPick = ''; this.diaryReading = false;
+      this.diaryDailies = []; this.diaryWeeklies = []; this.diaryMonthlies = []; this.diaryExpanded = {}; this.diaryRewriting = ''; this.diaryPick = ''; this.diaryReading = false;
       this.worldItems = []; this.worldSelection = {}; this.worldQuery = '';
       this.importReview = { batches: [], importId: '', filter: 'all', items: [], counts: { pending: 0, clef_yes: 0, clef_no: 0 }, offset: 0, more: false, loading: false, bulk: null };
       // 正在跑的聊天导入带着自己的空间，换空间不打断它；别的导入状态跟着空间清掉。
@@ -3689,6 +3706,7 @@ function memoryAdmin() {
         const payload = data.data || {};
         this.diaryDailies = payload.dailies || [];
         this.diaryWeeklies = payload.weeklies || [];
+        this.diaryMonthlies = payload.monthlies || [];
       } catch (error) {
         if (revision !== this.spaceRevision) return;
         this.notify(error.message);
@@ -3697,6 +3715,11 @@ function memoryAdmin() {
     },
     diaryListItems() {
       const self = this;
+      if (this.diaryMode === 'monthly') {
+        return this.diaryMonthlies.map(function(entry) {
+          return { key: 'monthly:' + entry.month, when: self.monthLabel(entry.month), title: entry.title, excerpt: self.excerpt(entry.summary) };
+        });
+      }
       if (this.diaryMode === 'weekly') {
         return this.diaryWeeklies.map(function(entry) {
           return { key: 'weekly:' + entry.week, when: entry.week + ' · ' + entry.start_date + ' – ' + entry.end_date, title: entry.title, excerpt: self.excerpt(entry.summary) };
@@ -3718,6 +3741,7 @@ function memoryAdmin() {
       const cut = key.indexOf(':');
       const kind = key.slice(0, cut);
       const id = key.slice(cut + 1);
+      if (kind === 'monthly') return this.diaryMonthlies.find(function(entry) { return entry.month === id; }) || null;
       if (kind === 'weekly') return this.diaryWeeklies.find(function(entry) { return entry.week === id; }) || null;
       return this.diaryDailies.find(function(entry) { return entry.date === id; }) || null;
     },

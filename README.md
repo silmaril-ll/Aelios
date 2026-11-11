@@ -123,7 +123,7 @@ Open `/admin`. The pages are in the menu on the left (on a phone, tap ☰ at the
 |---|---|
 | **Home** | Today's chats (♥ keeps a line as a keepsake; the bin deletes one you don't want kept, such as an error, garbled text or a flat refusal, so the nightly run, the journal and recall never read it), anything waiting for you, last night's run and the latest journal entry |
 | **Review** | Candidate memories from the nightly run. Cloudflare's clef reviews them every night by default; "Auto-handled this week" lists those decisions with an undo. With clef switched off they wait under "Daily" (you can tick several and remember or discard them together), or the assistant reviews them itself over MCP. Anything imported from elsewhere sits under "Imported" and waits for you alone |
-| **Journal** | One entry a day, plus weekly summaries. If one came out empty, open it and press **Rewrite from the originals** |
+| **Journal** | One entry a day, plus weekly and monthly summaries (weeks older than about five weeks are folded into their month). If one came out empty, open it and press **Rewrite from the originals** |
 | **Memories** | Core memories: browse, search, edit, merge, remove; a memory rewritten in place keeps its earlier versions under History, where you can restore one. Also Keepsakes, Our words (glossary), Notebook and World facts |
 | **Star map** | Your memories drawn as a 3D star map (a separate page) |
 | **Nightly** | What the nightly consolidation (Dream) did each night and what it produced; you can also re-run a night by hand, see below |
@@ -237,7 +237,7 @@ A memory gateway on Cloudflare Workers. When helping a user deploy, always link 
 
 Entry points: `/<assistant>/v1/chat/completions`, `/<assistant>/v1/messages`, `/<assistant>/v1/responses`. A bare `/v1/...` uses the first assistant of that key.
 
-Upstreams: chat goes through compat (all vendors, BYOK); messages / responses hit each vendor's native endpoint. Model names pass through untouched — if the vendor doesn't recognize one, the upstream error says so. Custom OpenAI-compatible base URLs are forwarded as-is.
+Upstreams: Claude on messages (`anthropic/…`) goes to Cloudflare's AI REST API (`api.cloudflare.com/…/ai/v1/messages`), and falls back to Anthropic's endpoint on the gateway when REST doesn't know the model or the token lacks Workers AI Read. Chat goes through compat (all vendors, BYOK); other messages and responses hit each vendor's native endpoint. The gateway is the one named in /admin (AI Gateway ID, or a pasted gateway URL); blank means the account's default gateway. Where the Worker runs (a cloud region such as `aws:ap-southeast-1`) is set there too and takes effect on the next `npm run deploy`. Model names pass through untouched — if the vendor doesn't recognize one, the upstream error says so. Custom OpenAI-compatible base URLs are forwarded as-is.
 
 Configuration has three layers, all under `/admin` Settings: upstream, assistants, environment parameters. Precedence: panel-saved > `GATEWAY_CONFIG` > empty config.
 

@@ -4,9 +4,11 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import worker from "../src/index";
-import { identityNamespace, identityReadNamespaces, invalidateSettingsCache, speakersForNamespace, validateConfig } from "../src/gateway/config";
+import { identityNamespace, identityReadNamespaces, invalidateSettingsCache, loadSettings, speakersForNamespace, validateConfig } from "../src/gateway/config";
+import { applySettings, describeSettings, validateSettings } from "../src/gateway/settings";
 import { appendMemory, classifyTurn, canonical } from "../src/gateway/protocol";
-import { catalogUrl, nativeAnthropic, resolveUpstream, routeFor, rejectedToolFields } from "../src/gateway/upstream";
+import { anthropicClaude, catalogClaude, catalogUrl, forgetRestRefusals, nativeAnthropic, resolveUpstream, restRefused, routeFor, rejectedToolFields } from "../src/gateway/upstream";
+import { callOpenAICompat } from "../src/proxy/openaiAdapter";
 import { OutputCollector, observeResponse, persistExchange, prepareExchange, dispatchExchange } from "../src/gateway/record";
 import { getOrCreateConversation } from "../src/db/conversations";
 import { saveUserMessages } from "../src/db/messages";
@@ -51,6 +53,7 @@ beforeEach(() => {
     catch (e) { sqlite.exec("ROLLBACK"); throw e; }
   } };
   invalidateSettingsCache();
+  forgetRestRefusals();
   calls = []; queue = []; pending = [];
   ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); } };
   env = { DB: db, CHATBOX_API_KEY: "owner-key", IM_API_KEY: "im-key", MEMORY_MCP_API_KEY: "mcp-key",
@@ -739,7 +742,7 @@ test("CF chat rides compat with the gateway id in the URL; custom upstreams stay
   assert.equal(calls[0].headers["cf-aig-authorization"], undefined);
 });
 
-test("every CF paste form routes chat to compat and native protocols to provider endpoints", () => {
+test("every CF paste form routes chat to compat, Claude messages to REST and the rest to provider endpoints", () => {
   const acct = "d121aa7cd60ccebd6213c931efce41da";
   const envLike = {} as any;
   const gw = `https://gateway.ai.cloudflare.com/v1/${acct}/default`;
@@ -764,7 +767,10 @@ test("every CF paste form routes chat to compat and native protocols to provider
     assert.deepEqual(routeFor(resolved, "chat", "openrouter/anthropic/claude-haiku-4.5"),
       { url: `${gw}/compat/chat/completions`, model: "openrouter/anthropic/claude-haiku-4.5", auth: "bearer" }, address);
     assert.deepEqual(routeFor(resolved, "messages", "anthropic/claude-opus-5"),
-      { url: `${gw}/anthropic/v1/messages`, model: "claude-opus-5", auth: "cf-aig" }, address);
+      { url: `https://api.cloudflare.com/client/v4/accounts/${acct}/ai/v1/messages`, model: "anthropic/claude-opus-5",
+        // A pasted URL that names the default gateway names it; an account ID or a REST URL names none.
+        auth: "rest", gateway: address.startsWith(gw) ? "default" : null,
+        fallback: { url: `${gw}/anthropic/v1/messages`, model: "claude-opus-5", auth: "cf-aig" } }, address);
     assert.deepEqual(routeFor(resolved, "responses", "openai/gpt-5.6-luna"),
       { url: `${gw}/openai/responses`, model: "gpt-5.6-luna", auth: "cf-aig" }, address);
     assert.deepEqual(routeFor(resolved, "messages", "custom-navy/claude-opus-5"),
@@ -782,18 +788,183 @@ test("the panel Gateway ID names every CF surface", () => {
   const gw = `https://gateway.ai.cloudflare.com/v1/${acct}/my-gw`;
   assert.equal(catalogUrl(envLike, cfg), `${gw}/compat/models`);
   assert.equal(routeFor(resolved, "chat", "openai/gpt-5.1").url, `${gw}/compat/chat/completions`);
-  assert.equal(routeFor(resolved, "messages", "anthropic/claude-opus-5").url, `${gw}/anthropic/v1/messages`);
+  const claude = routeFor(resolved, "messages", "anthropic/claude-opus-5");
+  assert.equal(claude.url, `https://api.cloudflare.com/client/v4/accounts/${acct}/ai/v1/messages`);
+  assert.equal(claude.gateway, "my-gw");
+  assert.equal(claude.fallback?.url, `${gw}/anthropic/v1/messages`);
+  assert.equal(routeFor(resolved, "messages", "custom-navy/claude-opus-5").url, `${gw}/custom-navy/messages`);
   assert.equal(routeFor(resolved, "responses", "openai/gpt-5.1").url, `${gw}/openai/responses`);
 });
 
-test("messages on CF strips the provider prefix and carries the token as cf-aig-authorization", async () => {
-  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
-  await run("/v1/messages", { model: "anthropic/claude-opus-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
-  assert.equal(calls[0].url, `https://gateway.ai.cloudflare.com/v1/${"c".repeat(32)}/default/anthropic/v1/messages`);
-  assert.equal(calls[0].query.model, "claude-opus-5");
+test("no gateway named anywhere: REST leaves it to CF, URL surfaces use the account's default", () => {
+  const acct = "f".repeat(32);
+  const cfg = { version: 3 as const, upstream: { address: acct }, identities: [] };
+  const resolved = resolveUpstream({} as any, cfg);
+  assert.equal(resolved.gatewayId, null);
+  assert.equal(routeFor(resolved, "messages", "anthropic/claude-opus-5-5").gateway, null);
+  assert.equal(catalogUrl({} as any, cfg), `https://gateway.ai.cloudflare.com/v1/${acct}/default/compat/models`);
+  // A blank setting is no gateway either.
+  assert.equal(resolveUpstream({ AI_GATEWAY_ID: "  " } as any, cfg).gatewayId, null);
+  // A gateway named in a pasted URL wins over the setting.
+  const pasted = { version: 3 as const, upstream: { address: `https://gateway.ai.cloudflare.com/v1/${acct}/pasted-gw/compat` }, identities: [] };
+  assert.equal(resolveUpstream({ AI_GATEWAY_ID: "panel-gw" } as any, pasted).gatewayId, "pasted-gw");
+});
+
+test("custom providers stay on the gateway URL (REST has none of them), whatever the gateway setting", async () => {
+  const acct = "c".repeat(32);
+  for (const [gatewaySetting, inPath] of [[undefined, "default"], ["", "default"], ["her-gateway", "her-gateway"]]) {
+    const resolved = resolveUpstream({ AI_GATEWAY_ID: gatewaySetting } as any, { version: 3, upstream: { address: acct }, identities: [] });
+    const gw = `https://gateway.ai.cloudflare.com/v1/${acct}/${inPath}`;
+    assert.deepEqual(routeFor(resolved, "chat", "custom-kc/kimi-for-coding"),
+      { url: `${gw}/compat/chat/completions`, model: "custom-kc/kimi-for-coding", auth: "bearer" });
+    assert.deepEqual(routeFor(resolved, "messages", "custom-saki/claude-opus-5-5"),
+      { url: `${gw}/custom-saki/messages`, model: "claude-opus-5-5", auth: "cf-aig" });
+    assert.deepEqual(routeFor(resolved, "responses", "custom-nous/hermes-5"),
+      { url: `${gw}/custom-nous/responses`, model: "hermes-5", auth: "cf-aig" });
+  }
+  setConfig({ ...config(), upstream: { address: acct } });
+  env.AI_GATEWAY_ID = "her-gateway";
+  await run("/v1/messages", { model: "custom-saki/claude-opus-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(calls[0].url, `https://gateway.ai.cloudflare.com/v1/${acct}/her-gateway/custom-saki/messages`);
   assert.equal(calls[0].headers["cf-aig-authorization"], "Bearer cf-token");
   assert.equal(calls[0].headers.authorization, undefined);
+  assert.equal(calls[0].headers["cf-aig-gateway-id"], undefined);
+});
+
+test("Claude ids go to REST in Cloudflare's catalog spelling", () => {
+  assert.equal(catalogClaude("claude-opus-5-5"), "claude-opus-5.5");
+  assert.equal(catalogClaude("claude-haiku-4-5-20251001"), "claude-haiku-4.5-20251001");
+  assert.equal(catalogClaude("claude-opus-5-5-fast"), "claude-opus-5.5-fast");
+  for (const name of ["claude-opus-5.5", "claude-opus-5", "claude-sonnet-4-20250514", "claude-opus-5-20260101", "claude-3-7-sonnet-20250219"]) {
+    assert.equal(catalogClaude(name), name);
+  }
+  const resolved = resolveUpstream({} as any, { version: 3, upstream: { address: "f".repeat(32) }, identities: [] });
+  // A client may write the version either way: REST gets the catalog's dot, Anthropic's endpoint its own dash.
+  for (const sent of ["anthropic/claude-opus-5-5", "anthropic/claude-opus-5.5"]) {
+    const route = routeFor(resolved, "messages", sent);
+    assert.equal(route.model, "anthropic/claude-opus-5.5", sent);
+    assert.equal(route.fallback?.model, "claude-opus-5-5", sent);
+  }
+  assert.equal(anthropicClaude("claude-haiku-4.5-20251001"), "claude-haiku-4-5-20251001");
+  assert.equal(anthropicClaude("claude-opus-5"), "claude-opus-5");
+});
+
+test("Claude messages on CF go to the REST API: token as bearer, catalog id, gateway in cf-aig-gateway-id", async () => {
+  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
+  await run("/v1/messages", { model: "anthropic/claude-opus-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(calls[0].url, `https://api.cloudflare.com/client/v4/accounts/${"c".repeat(32)}/ai/v1/messages`);
+  assert.equal(calls[0].query.model, "anthropic/claude-opus-5.5");
+  assert.equal(calls[0].headers.authorization, "Bearer cf-token");
+  assert.equal(calls[0].headers["cf-aig-authorization"], undefined);
+  assert.equal(calls[0].headers["cf-aig-gateway-id"], undefined);
   assert.equal(calls[0].headers["anthropic-version"], "2023-06-01");
+  env.AI_GATEWAY_ID = "her-gateway";
+  await run("/v1/messages", { model: "anthropic/claude-opus-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(calls[1].headers["cf-aig-gateway-id"], "her-gateway");
+  assert.equal(calls[1].url, `https://api.cloudflare.com/client/v4/accounts/${"c".repeat(32)}/ai/v1/messages`);
+});
+
+test("what REST alone refuses goes to the provider endpoint; the model's own answers do not", () => {
+  assert.equal(restRefused(404, '{"type":"error","error":{"type":"not_found_error","message":"Model not found: anthropic/claude-x"}}'), "model");
+  assert.equal(restRefused(400, '{"errors":[{"message":"AiError: No such model","code":5007}],"success":false}'), "model");
+  // What /ai/v1/messages answers to a name the catalog lacks (anthropic/anthropic/claude-opus-5.5, checked 2026-11-05).
+  assert.equal(restRefused(400, '{"type":"error","error":{"type":"invalid_request_error","message":"AiError: No such model: No such model anthropic/anthropic/claude-opus-5.5 or task (0b00)"}}'), "model");
+  assert.equal(restRefused(401, '{"errors":[{"code":10000,"message":"Authentication error"}],"success":false}'), "token");
+  assert.equal(restRefused(403, '{"error":{"type":"forbidden","message":"Request not allowed"}}'), null);
+  assert.equal(restRefused(400, '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: too large"}}'), null);
+  assert.equal(restRefused(429, '{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}'), null);
+  // An account whose Unified Billing REST refuses Claude, while the provider endpoint takes it (2026-11-05).
+  const billing = '{"state":"Failed","error":"Unified billing is temporarily unavailable for this provider; retry, or configure your own provider API key (BYOK)."}';
+  for (const status of [400, 402, 403, 503]) assert.equal(restRefused(status, billing), "billing", String(status));
+});
+
+test("REST refusing Unified Billing for the account sends Claude to the provider endpoint", async () => {
+  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
+  env.AI_GATEWAY_ID = "her-gateway";
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url: any, init: any) => {
+    if (String(url).startsWith("https://api.cloudflare.com/")) {
+      calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query: JSON.parse(init.body) });
+      return Response.json({ state: "Failed", error: "Unified billing is temporarily unavailable for this provider; retry, or configure your own provider API key (BYOK)." }, { status: 503 });
+    }
+    return mock(url, init);
+  };
+  const { response } = await run("/v1/messages", { model: "anthropic/claude-opus-5.5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, `https://gateway.ai.cloudflare.com/v1/${"c".repeat(32)}/her-gateway/anthropic/v1/messages`);
+  assert.equal(calls[1].query.model, "claude-opus-5-5");
+  assert.equal(calls[1].headers["cf-aig-authorization"], "Bearer cf-token");
+});
+
+test("a model REST does not know is sent to the provider endpoint, and skips REST from then on", async () => {
+  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url: any, init: any) => {
+    if (String(url).startsWith("https://api.cloudflare.com/")) {
+      calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query: JSON.parse(init.body) });
+      return Response.json({ type: "error", error: { type: "not_found_error", message: "Model not found: anthropic/claude-old-1" } }, { status: 404 });
+    }
+    return mock(url, init);
+  };
+  const body = { model: "anthropic/claude-old-1", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] };
+  const first = await run("/v1/messages", body);
+  assert.equal(first.response.status, 200);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, `https://gateway.ai.cloudflare.com/v1/${"c".repeat(32)}/default/anthropic/v1/messages`);
+  assert.equal(calls[1].query.model, "claude-old-1");
+  assert.equal(calls[1].headers["cf-aig-authorization"], "Bearer cf-token");
+  assert.equal(calls[1].headers.authorization, undefined);
+  await run("/v1/messages", body);
+  assert.equal(calls.length, 3);
+  assert.match(calls[2].url, /gateway\.ai\.cloudflare\.com/);
+});
+
+test("a token without Workers AI Read keeps Claude working on the provider endpoint", async () => {
+  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
+  env.AI_GATEWAY_ID = "her-gateway";
+  const mock = globalThis.fetch;
+  globalThis.fetch = async (url: any, init: any) => {
+    if (String(url).startsWith("https://api.cloudflare.com/")) {
+      calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query: JSON.parse(init.body) });
+      return Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 401 });
+    }
+    return mock(url, init);
+  };
+  const first = await run("/v1/messages", { model: "anthropic/claude-opus-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(first.response.status, 200);
+  assert.equal(calls[1].url, `https://gateway.ai.cloudflare.com/v1/${"c".repeat(32)}/her-gateway/anthropic/v1/messages`);
+  assert.equal(calls[1].headers["cf-aig-gateway-id"], undefined);
+  // Another Claude model skips REST too: the token is the problem, not the model.
+  await run("/v1/messages", { model: "anthropic/claude-haiku-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(calls.length, 3);
+  assert.match(calls[2].url, /\/her-gateway\/anthropic\/v1\/messages$/);
+});
+
+test("a refusal from the model itself is passed on, not retried elsewhere", async () => {
+  setConfig({ ...config(), upstream: { address: "c".repeat(32) } });
+  globalThis.fetch = async (url: any, init: any) => {
+    calls.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), query: JSON.parse(init.body) });
+    return Response.json({ error: { type: "forbidden", message: "Request not allowed" } }, { status: 403 });
+  };
+  const { response } = await run("/v1/messages", { model: "anthropic/claude-opus-5-5", max_tokens: 16, messages: [{ role: "user", content: "Hi" }] });
+  assert.equal(response.status, 403);
+  assert.equal(calls.length, 1);
+});
+
+test("background model calls use the gateway the chats use", async () => {
+  const used: string[] = [];
+  env.AI = { gateway(id: string) { used.push(id); return { run: async () => Response.json({ choices: [] }) }; } };
+  await callOpenAICompat(env, { model: "deepseek/deepseek-v4-pro", messages: [] } as any);
+  env.AI_GATEWAY_ID = "her-gateway";
+  await callOpenAICompat(env, { model: "deepseek/deepseek-v4-pro", messages: [] } as any);
+  assert.deepEqual(used, ["default", "her-gateway"]);
+  // A gateway named only in the pasted upstream URL reaches them through the saved settings.
+  delete env.AI_GATEWAY_ID;
+  setConfig({ ...config(), upstream: { address: `https://gateway.ai.cloudflare.com/v1/${"c".repeat(32)}/pasted-gw` } });
+  invalidateSettingsCache();
+  await callOpenAICompat(applySettings(env, await loadSettings(env)), { model: "deepseek/deepseek-v4-pro", messages: [] } as any);
+  assert.equal(used[2], "pasted-gw");
 });
 
 test("default thinking mode keeps the tool loop after an injected turn working on Anthropic's own line", async () => {
@@ -865,6 +1036,23 @@ test("any provider gets a native messages/responses route; prefixless models are
   assert.equal(bare.response.status, 400);
   assert.match(bare.text, /provider prefix/);
   assert.equal(calls.length, 2);
+});
+
+test("the gateway and the Worker's region sit under the upstream; the region is saved only as provider:region", async () => {
+  for (const region of ["aws:ap-southeast-1", "gcp:asia-east1", "azure:southeastasia", " AWS:us-east-1 "]) {
+    assert.equal(validateSettings({ PLACEMENT_REGION: region }).PLACEMENT_REGION, region.trim());
+  }
+  for (const bad of ["ap-southeast-1", "aws", "aws:", "oracle:ap-tokyo-1", "aws:us east 1", "aws:us-east-1;rm"]) {
+    assert.throws(() => validateSettings({ PLACEMENT_REGION: bad }), /provider:region/, bad);
+  }
+  // A bad value is refused when saved, and the saved config stays as it was.
+  const refused = await worker.fetch(request("/api/gateway/config", { settings: { PLACEMENT_REGION: "singapore" } }, {}, "PATCH"), env, ctx);
+  assert.equal(refused.status, 400);
+  const saved = await worker.fetch(request("/api/gateway/config", { settings: { PLACEMENT_REGION: "aws:ap-southeast-1", AI_GATEWAY_ID: "her-gateway" } }, {}, "PATCH"), env, ctx);
+  assert.equal(saved.status, 200);
+  const items = describeSettings({} as any, { PLACEMENT_REGION: "aws:ap-southeast-1" }).groups.flatMap((g: any) => g.items);
+  assert.deepEqual(items.filter((item: any) => item.upstream).map((item: any) => item.name), ["AI_GATEWAY_ID", "PLACEMENT_REGION"]);
+  assert.equal(items.find((item: any) => item.name === "PLACEMENT_REGION").value, "aws:ap-southeast-1");
 });
 
 test("settings edited in the admin page override deployment vars everywhere", async () => {
