@@ -1263,9 +1263,19 @@ function layoutStars(rawNodes) {
     }));
   }
 
-  // easter eggs: Clay at 汉江 source (长江色), Pixel at 长江 source (汉江色)
-  var clayPos = offsetOnCurve(curves.han, 0.02, 'easter:clay', 0.5);
-  clayPos.y += 1.2;
+  // easter eggs: Clay & Pixel side by side right where the two rivers meet.
+  // Colors stay swapped (Clay in 长江色, Pixel in 汉江色) — each carrying the other's river.
+  var meetAt = curves.merge.getPointAt(0.0);
+  var meetTan = curves.merge.getTangentAt(0.0);
+  if (meetTan.lengthSq() < 1e-8) meetTan.set(0, 0, 1);
+  else meetTan.normalize();
+  var meetSide = new THREE.Vector3().crossVectors(meetTan, new THREE.Vector3(0, 1, 0));
+  if (meetSide.lengthSq() < 1e-8) meetSide.set(1, 0, 0);
+  else meetSide.normalize();
+  meetAt.y += 1.0;
+  var clayPos = meetAt.clone().addScaledVector(meetSide, 0.22);
+  var pixelPos = meetAt.clone().addScaledVector(meetSide, -0.22);
+  pixelPos.y -= 0.08; // she's a little shorter, leaning in
   laid.push({
     id: '__easter_clay__',
     label: 'Clay',
@@ -1275,13 +1285,11 @@ function layoutStars(rawNodes) {
     version_status: null,
     created_at: '',
     _pos: clayPos,
-    _river: 'han',
+    _river: 'merge',
     _easter: true,
     _special: true,
     _forceColor: YANG_COLORS.relationship.clone()
   });
-  var pixelPos = offsetOnCurve(curves.yang, 0.02, 'easter:pixel', 0.5);
-  pixelPos.y += 1.2;
   laid.push({
     id: '__easter_pixel__',
     label: 'Pixel',
@@ -1291,7 +1299,7 @@ function layoutStars(rawNodes) {
     version_status: null,
     created_at: '',
     _pos: pixelPos,
-    _river: 'yang',
+    _river: 'merge',
     _easter: true,
     _special: true,
     _forceColor: HAN_COLORS.preference.clone()
