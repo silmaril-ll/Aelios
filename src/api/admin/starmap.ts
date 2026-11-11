@@ -1263,34 +1263,34 @@ function layoutStars(rawNodes) {
     }));
   }
 
-  // easter eggs: 旦九 at 汉江 source (长江色), 咲咲 at 长江 source (汉江色)
-  var danjiuPos = offsetOnCurve(curves.han, 0.02, 'easter:danjiu', 0.5);
-  danjiuPos.y += 1.2;
+  // easter eggs: Clay at 汉江 source (长江色), Pixel at 长江 source (汉江色)
+  var clayPos = offsetOnCurve(curves.han, 0.02, 'easter:clay', 0.5);
+  clayPos.y += 1.2;
   laid.push({
-    id: '__easter_danjiu__',
-    label: '旦九',
+    id: '__easter_clay__',
+    label: 'Clay',
     type: 'relationship',
     importance: 0.95,
     pinned: false,
     version_status: null,
     created_at: '',
-    _pos: danjiuPos,
+    _pos: clayPos,
     _river: 'han',
     _easter: true,
     _special: true,
     _forceColor: YANG_COLORS.relationship.clone()
   });
-  var sakuraPos = offsetOnCurve(curves.yang, 0.02, 'easter:sakura', 0.5);
-  sakuraPos.y += 1.2;
+  var pixelPos = offsetOnCurve(curves.yang, 0.02, 'easter:pixel', 0.5);
+  pixelPos.y += 1.2;
   laid.push({
-    id: '__easter_sakura__',
-    label: '咲咲',
+    id: '__easter_pixel__',
+    label: 'Pixel',
     type: 'preference',
     importance: 0.95,
     pinned: false,
     version_status: null,
     created_at: '',
-    _pos: sakuraPos,
+    _pos: pixelPos,
     _river: 'yang',
     _easter: true,
     _special: true,
