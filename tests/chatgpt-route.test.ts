@@ -88,7 +88,7 @@ beforeEach(() => {
   invalidateSettingsCache(); resetModelCache(); resetLearnedFields(); resetOAuthCaches();
   asked = []; queue = []; pending = []; tokenCalls = [];
   ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); } };
-  env = { DB: db, CHATBOX_API_KEY: "owner-key", IM_API_KEY: "im-key", CLOUDFLARE_API_TOKEN: "cf-token-must-not-leak",
+  env = { DB: db, MCP_WRITE_ONLY: "off", CHATBOX_API_KEY: "owner-key", IM_API_KEY: "im-key", CLOUDFLARE_API_TOKEN: "cf-token-must-not-leak",
     AI: { async run() { throw new Error("embedding unavailable in test"); } },
     MEMORY_QUEUE: { async send(e: any) { queue.push(e); } } };
   answer = () => sseResponse(textEvents("Hello there"));

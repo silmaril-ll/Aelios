@@ -41,7 +41,7 @@ beforeEach(() => {
   } };
   invalidateSettingsCache();
   calls = []; clefAnswers = [];
-  env = { DB: db, CHATBOX_API_KEY: "owner-key", CLOUDFLARE_API_TOKEN: "cf-token",
+  env = { DB: db, MCP_WRITE_ONLY: "off", CHATBOX_API_KEY: "owner-key", CLOUDFLARE_API_TOKEN: "cf-token",
     DREAM_MODEL: "workers-ai/@cf/openai/gpt-oss-120b",
     AI: { async run(model: string, input: any) {
       if (model.includes("bge")) return { data: [[0.1, 0.2, 0.3]] };

@@ -48,7 +48,7 @@ beforeEach(() => {
   } };
   invalidateSettingsCache();
   extractReplies = []; extractPrompts = []; clefAnswers = []; clefCalls = 0; similar = null;
-  env = { DB: db, CHATBOX_API_KEY: "owner-key", IM_API_KEY: "im-key", CLOUDFLARE_API_TOKEN: "cf-token",
+  env = { DB: db, MCP_WRITE_ONLY: "off", CHATBOX_API_KEY: "owner-key", IM_API_KEY: "im-key", CLOUDFLARE_API_TOKEN: "cf-token",
     DREAM_MODEL: "workers-ai/@cf/openai/gpt-oss-120b", DREAM_TIMEZONE: "Asia/Shanghai",
     AI: { async run(model: string, input: any) {
       if (model.includes("bge")) return { data: [[0.1, 0.2, 0.3]] };

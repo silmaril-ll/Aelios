@@ -34,7 +34,7 @@ beforeEach(() => {
     const results = []; for (const statement of statements) results.push(await statement.run()); return results;
   } };
   invalidateSettingsCache();
-  env = { DB: db, CHATBOX_API_KEY: "owner-key", MEMORY_MCP_API_KEY: "mcp-key", GUIDE_DOG_API_KEY: "dog-key",
+  env = { DB: db, MCP_WRITE_ONLY: "off", CHATBOX_API_KEY: "owner-key", MEMORY_MCP_API_KEY: "mcp-key", GUIDE_DOG_API_KEY: "dog-key",
     AI: { async run() { return { data: [[0.1, 0.2, 0.3]] }; } },
     VECTORIZE: { async upsert() { return {}; }, async deleteByIds() { return {}; }, async query() { return { matches: [] }; } } };
   globalThis.fetch = async (url: any) => { throw new Error(`unexpected upstream call: ${url}`); };

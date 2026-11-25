@@ -1,4 +1,5 @@
 import { authenticate } from "../auth/apiKey";
+import { isMcpWriteOnly, isWriteOnlyCallable, WRITE_ONLY_GUIDE, WRITE_ONLY_REFUSAL, writeOnlyTools } from "./mcpWriteOnly";
 import { getOrCreateConversation } from "../db/conversations";
 import { fetchMemoriesByIds, getMemoryById, listMemoriesPage } from "../db/memories";
 import { filterUnsavedMessages, getMessagesByIds, saveIngestMessages } from "../db/messages";
@@ -595,6 +596,7 @@ async function callTool(
   const args = isRecord(params.arguments) ? params.arguments : {};
   const requested = typeof params.name === "string" ? params.name : "";
   const name = RENAMED_TOOLS.get(requested) ?? requested;
+  if (isMcpWriteOnly(env) && !isWriteOnlyCallable(name)) return toolError(WRITE_ONLY_REFUSAL);
 
   if (name === "wake_up") {
     if (!hasScope(profile, "memory:read")) return toolError("Missing memory:read scope");
@@ -1208,12 +1210,13 @@ async function handleRpc(
       protocolVersion: "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "companion-memory-mcp", version: "0.1.0" },
-      instructions: MEMORY_GUIDE
+      instructions: isMcpWriteOnly(env) ? WRITE_ONLY_GUIDE : MEMORY_GUIDE
     });
   }
 
   if (request.method === "tools/list") {
-    return rpcResult(request.id, { tools: getTools(listOptions) });
+    const tools = getTools(listOptions);
+    return rpcResult(request.id, { tools: isMcpWriteOnly(env) ? writeOnlyTools(tools) : tools });
   }
 
   if (request.method === "resources/list") {
@@ -1247,7 +1250,9 @@ export async function handleMcp(request: Request, env: Env, ctx: ExecutionContex
       name: "companion-memory-mcp",
       transport: "streamable-http",
       endpoint: new URL(request.url).pathname,
-      tools: getTools(toolListOptions(env, new URL(request.url))).map((tool) => tool.name)
+      tools: (isMcpWriteOnly(env) ? writeOnlyTools : (t: Array<Record<string, unknown>>) => t)(
+        getTools(toolListOptions(env, new URL(request.url)))
+      ).map((tool) => tool.name)
     });
   }
 

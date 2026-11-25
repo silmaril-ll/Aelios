@@ -75,6 +75,7 @@ export interface Env {
   DEDUP_COSINE?: string;
   // 每天夜整完用 Cloudflare 的 clef 审候选，只分记住和放下。默认开，off/false 关。
   CLEF_AUTO_REVIEW?: string;
+  MCP_WRITE_ONLY?: string;
   // clef 一晚最多审几条候选，默认 100。
   JUDGE_MAX_CANDIDATES?: string;
   DAILY_DIGEST_MAX_MESSAGES?: string;
